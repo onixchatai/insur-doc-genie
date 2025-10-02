@@ -8,6 +8,22 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle }
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
 import { FileText, Loader2 } from "lucide-react";
+import { z } from "zod";
+
+const signInSchema = z.object({
+  email: z.string().trim().email({ message: "Invalid email address" }).max(255, { message: "Email too long" }),
+  password: z.string().min(8, { message: "Password must be at least 8 characters" }),
+});
+
+const signUpSchema = z.object({
+  email: z.string().trim().email({ message: "Invalid email address" }).max(255, { message: "Email too long" }),
+  password: z.string()
+    .min(8, { message: "Password must be at least 8 characters" })
+    .regex(/[A-Z]/, { message: "Password must contain at least one uppercase letter" })
+    .regex(/[a-z]/, { message: "Password must contain at least one lowercase letter" })
+    .regex(/[0-9]/, { message: "Password must contain at least one number" }),
+  fullName: z.string().trim().min(1, { message: "Name is required" }).max(100, { message: "Name too long" }),
+});
 
 const Auth = () => {
   const navigate = useNavigate();
@@ -38,12 +54,28 @@ const Auth = () => {
 
   const handleSignIn = async (e: React.FormEvent) => {
     e.preventDefault();
+    
+    // Validate input
+    const result = signInSchema.safeParse({ 
+      email: signInEmail, 
+      password: signInPassword 
+    });
+    
+    if (!result.success) {
+      toast({
+        variant: "destructive",
+        title: "Validation Error",
+        description: result.error.errors[0].message,
+      });
+      return;
+    }
+
     setLoading(true);
 
     try {
       const { error } = await supabase.auth.signInWithPassword({
-        email: signInEmail,
-        password: signInPassword,
+        email: result.data.email,
+        password: result.data.password,
       });
 
       if (error) throw error;
@@ -65,16 +97,33 @@ const Auth = () => {
 
   const handleSignUp = async (e: React.FormEvent) => {
     e.preventDefault();
+    
+    // Validate input
+    const result = signUpSchema.safeParse({ 
+      email: signUpEmail, 
+      password: signUpPassword,
+      fullName: signUpFullName 
+    });
+    
+    if (!result.success) {
+      toast({
+        variant: "destructive",
+        title: "Validation Error",
+        description: result.error.errors[0].message,
+      });
+      return;
+    }
+
     setLoading(true);
 
     try {
       const { error } = await supabase.auth.signUp({
-        email: signUpEmail,
-        password: signUpPassword,
+        email: result.data.email,
+        password: result.data.password,
         options: {
           emailRedirectTo: `${window.location.origin}/`,
           data: {
-            full_name: signUpFullName,
+            full_name: result.data.fullName,
           },
         },
       });

@@ -7,6 +7,14 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import { Loader2, Building } from "lucide-react";
+import { z } from "zod";
+
+const companySettingsSchema = z.object({
+  company_name: z.string().trim().max(200, { message: "Company name too long" }).optional(),
+  company_address: z.string().trim().max(500, { message: "Address too long" }).optional(),
+  license_number: z.string().trim().max(100, { message: "License number too long" }).optional(),
+  iicrc_certification_number: z.string().trim().max(100, { message: "Certification number too long" }).optional(),
+});
 
 const Settings = () => {
   const { toast } = useToast();
@@ -57,15 +65,38 @@ const Settings = () => {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setSaving(true);
 
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error("Not authenticated");
 
+      // Validate input
+      const result = companySettingsSchema.safeParse({
+        company_name: profile.company_name || undefined,
+        company_address: profile.company_address || undefined,
+        license_number: profile.license_number || undefined,
+        iicrc_certification_number: profile.iicrc_certification_number || undefined,
+      });
+
+      if (!result.success) {
+        toast({
+          variant: "destructive",
+          title: "Validation Error",
+          description: result.error.errors[0].message,
+        });
+        return;
+      }
+
+      setSaving(true);
+
       const { error } = await supabase
         .from("profiles")
-        .update(profile)
+        .update({
+          company_name: result.data.company_name || null,
+          company_address: result.data.company_address || null,
+          license_number: result.data.license_number || null,
+          iicrc_certification_number: result.data.iicrc_certification_number || null,
+        })
         .eq("id", user.id);
 
       if (error) throw error;

@@ -9,6 +9,16 @@ import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
 import { Upload, Loader2, Sparkles } from "lucide-react";
 import heroImage from "@/assets/hero-bg.jpg";
+import { z } from "zod";
+
+const manualItemSchema = z.object({
+  name: z.string().trim().min(1, { message: "Item name is required" }).max(200, { message: "Name too long" }),
+  description: z.string().trim().max(1000, { message: "Description too long" }).optional(),
+  category: z.string().trim().max(100, { message: "Category too long" }).optional(),
+  estimated_value: z.number().min(0, { message: "Value must be positive" }).max(1000000, { message: "Value too high" }).optional(),
+  room_location: z.string().trim().max(100, { message: "Location too long" }).optional(),
+  condition: z.string().min(1, { message: "Condition is required" }),
+});
 
 const Home = () => {
   const { toast } = useToast();
@@ -45,20 +55,40 @@ const Home = () => {
 
   const handleManualSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setLoading(true);
 
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error("Not authenticated");
 
+      // Validate input
+      const result = manualItemSchema.safeParse({
+        name: manualEntry.name,
+        description: manualEntry.description || undefined,
+        category: manualEntry.category || undefined,
+        estimated_value: manualEntry.estimated_value ? parseFloat(manualEntry.estimated_value) : undefined,
+        room_location: manualEntry.room_location || undefined,
+        condition: manualEntry.condition,
+      });
+
+      if (!result.success) {
+        toast({
+          variant: "destructive",
+          title: "Validation Error",
+          description: result.error.errors[0].message,
+        });
+        return;
+      }
+
+      setLoading(true);
+
       const { error } = await supabase.from("inventory_items").insert({
         user_id: user.id,
-        name: manualEntry.name,
-        description: manualEntry.description,
-        category: manualEntry.category,
-        estimated_value: manualEntry.estimated_value ? parseFloat(manualEntry.estimated_value) : null,
-        room_location: manualEntry.room_location,
-        condition: manualEntry.condition,
+        name: result.data.name,
+        description: result.data.description || null,
+        category: result.data.category || null,
+        estimated_value: result.data.estimated_value || null,
+        room_location: result.data.room_location || null,
+        condition: result.data.condition,
       });
 
       if (error) throw error;
