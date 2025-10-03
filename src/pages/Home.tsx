@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -7,7 +7,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
-import { Upload, Loader2, Sparkles } from "lucide-react";
+import { Upload, Loader2, Sparkles, Camera, FileText } from "lucide-react";
 import heroImage from "@/assets/hero-bg.jpg";
 import { z } from "zod";
 
@@ -22,7 +22,14 @@ const manualItemSchema = z.object({
 
 const Home = () => {
   const { toast } = useToast();
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [loading, setLoading] = useState(false);
+  const [files, setFiles] = useState<File[]>([]);
+  const [uploading, setUploading] = useState(false);
+  const [analyzing, setAnalyzing] = useState(false);
+  const [uploadedUrls, setUploadedUrls] = useState<string[]>([]);
+  const [showAnalyzeButton, setShowAnalyzeButton] = useState(false);
+  const [analysisStep, setAnalysisStep] = useState<'uploading' | 'analyzing' | 'saving' | null>(null);
   const [manualEntry, setManualEntry] = useState({
     name: "",
     description: "",
@@ -32,82 +39,120 @@ const Home = () => {
     condition: "good",
   });
 
-  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files;
-    if (!files || files.length === 0) return;
+  const handleFileUpload = async (selectedFiles: File[]) => {
+    if (selectedFiles.length === 0) return;
 
-    setLoading(true);
+    setUploading(true);
+    setAnalysisStep('uploading');
+    const imageUrls: string[] = [];
+
     try {
       const { data: { user } } = await supabase.auth.getUser();
-      if (!user) throw new Error("Not authenticated");
+      
+      if (!user) {
+        toast({
+          title: "Error",
+          description: "You must be logged in to upload photos",
+          variant: "destructive",
+        });
+        return;
+      }
 
-      let successCount = 0;
-      let errorCount = 0;
-
-      for (let i = 0; i < files.length; i++) {
-        const file = files[i];
+      for (const file of selectedFiles) {
         const fileExt = file.name.split('.').pop();
-        const fileName = `${user.id}/${Date.now()}_${Math.random().toString(36).substring(7)}.${fileExt}`;
+        const fileName = `${Math.random()}.${fileExt}`;
+        const filePath = `${user.id}/${fileName}`;
 
-        // Upload to storage
         const { error: uploadError } = await supabase.storage
           .from('item-photos')
-          .upload(fileName, file);
+          .upload(filePath, file);
 
         if (uploadError) {
-          console.error('Upload error:', uploadError);
-          errorCount++;
+          toast({
+            title: "Upload Error",
+            description: `Failed to upload ${file.name}`,
+            variant: "destructive",
+          });
           continue;
         }
 
-        // Get public URL
         const { data: { publicUrl } } = supabase.storage
           .from('item-photos')
-          .getPublicUrl(fileName);
+          .getPublicUrl(filePath);
 
-        // Create inventory item with image
-        const { error: insertError } = await supabase
-          .from('inventory_items')
-          .insert({
-            user_id: user.id,
-            name: file.name.replace(/\.[^/.]+$/, ''), // Remove extension
-            image_url: publicUrl,
-            condition: 'good',
-          });
-
-        if (insertError) {
-          console.error('Insert error:', insertError);
-          errorCount++;
-        } else {
-          successCount++;
-        }
+        imageUrls.push(publicUrl);
       }
 
-      if (successCount > 0) {
+      if (imageUrls.length > 0) {
+        setUploadedUrls(imageUrls);
+        setShowAnalyzeButton(true);
         toast({
-          title: "Upload Successful",
-          description: `${successCount} photo${successCount > 1 ? 's' : ''} uploaded successfully!`,
+          title: "Success",
+          description: `${imageUrls.length} photo(s) uploaded. Ready to analyze!`,
         });
       }
-
-      if (errorCount > 0) {
-        toast({
-          variant: "destructive",
-          title: "Some Uploads Failed",
-          description: `${errorCount} photo${errorCount > 1 ? 's' : ''} failed to upload.`,
-        });
-      }
-
-      // Reset input
-      e.target.value = '';
-    } catch (error: any) {
+    } catch (error) {
+      console.error('Upload error:', error);
       toast({
+        title: "Error",
+        description: "An error occurred during upload",
         variant: "destructive",
-        title: "Upload Failed",
-        description: error.message,
       });
     } finally {
-      setLoading(false);
+      setUploading(false);
+      setAnalysisStep(null);
+    }
+  };
+
+  const handleAnalyzeImages = async () => {
+    if (uploadedUrls.length === 0) return;
+
+    setAnalyzing(true);
+    setAnalysisStep('analyzing');
+
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      
+      if (!session) {
+        toast({
+          title: "Error",
+          description: "You must be logged in",
+          variant: "destructive",
+        });
+        return;
+      }
+
+      setAnalysisStep('saving');
+
+      const { data, error } = await supabase.functions.invoke('analyze-items', {
+        body: { imageUrls: uploadedUrls },
+      });
+
+      if (error) {
+        throw error;
+      }
+
+      toast({
+        title: "Success!",
+        description: `Analyzed and saved ${data.items.length} item(s)`,
+      });
+
+      setUploadedUrls([]);
+      setShowAnalyzeButton(false);
+      setFiles([]);
+      if (fileInputRef.current) {
+        fileInputRef.current.value = "";
+      }
+    } catch (error) {
+      console.error('Analysis error:', error);
+      toast({
+        title: "Error",
+        description: "Failed to analyze images",
+        variant: "destructive",
+      });
+    } finally {
+      setAnalyzing(false);
+      setAnalysisStep(null);
     }
   };
 
@@ -209,45 +254,142 @@ const Home = () => {
                 Upload photos and let AI analyze and categorize your items
               </CardDescription>
             </CardHeader>
-            <CardContent>
-              <div className="border-2 border-dashed border-border rounded-lg p-8 text-center hover:border-accent transition-colors">
-                <Upload className="mx-auto h-12 w-12 text-muted-foreground mb-4" />
-                <p className="text-sm text-muted-foreground mb-4">
-                  Drop images here or click to browse
-                </p>
-                <Input
-                  type="file"
-                  multiple
-                  accept="image/*"
-                  onChange={handleFileUpload}
-                  disabled={loading}
-                  className="hidden"
-                  id="file-upload"
-                />
-                <Label htmlFor="file-upload">
-                  <Button asChild disabled={loading}>
-                    <span>
-                      {loading ? (
-                        <>
-                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                          Processing...
-                        </>
-                      ) : (
-                        "Select Images"
-                      )}
-                    </span>
+            <CardContent className="flex flex-col items-center justify-center py-12">
+              {!showAnalyzeButton && !analyzing && (
+                <>
+                  <div className="mb-8 text-center">
+                    <Upload className="w-16 h-16 mx-auto mb-4 text-primary" />
+                    <p className="text-muted-foreground mb-2">
+                      Drag & drop images here or choose from your device
+                    </p>
+                    <p className="text-sm text-muted-foreground">
+                      Supports JPG, PNG, WebP • Max 10MB per file
+                    </p>
+                  </div>
+                  
+                  <div className="flex gap-4 mb-6">
+                    <Button
+                      onClick={() => fileInputRef.current?.click()}
+                      disabled={uploading}
+                      className="gap-2"
+                    >
+                      <Upload className="w-4 h-4" />
+                      Select Images
+                    </Button>
+                    <Button variant="outline" className="gap-2">
+                      <Camera className="w-4 h-4" />
+                      Take Photos
+                    </Button>
+                  </div>
+
+                  {files.length > 0 && !uploading && (
+                    <div className="w-full">
+                      <p className="text-sm text-muted-foreground mb-4">
+                        {files.length} file(s) selected
+                      </p>
+                      <Button
+                        onClick={() => handleFileUpload(files)}
+                        className="w-full"
+                      >
+                        Upload Photos
+                      </Button>
+                    </div>
+                  )}
+
+                  {uploading && (
+                    <div className="w-full text-center">
+                      <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mx-auto mb-2" />
+                      <p className="text-sm text-muted-foreground">Uploading images...</p>
+                    </div>
+                  )}
+                </>
+              )}
+
+              {showAnalyzeButton && !analyzing && (
+                <div className="w-full space-y-4">
+                  <div className="text-center mb-6">
+                    <Sparkles className="w-16 h-16 mx-auto mb-4 text-primary" />
+                    <h3 className="text-lg font-semibold mb-2">Ready to Analyze ({uploadedUrls.length} images)</h3>
+                    <p className="text-sm text-muted-foreground">
+                      Our AI will analyze your photos with precision
+                    </p>
+                  </div>
+                  <Button
+                    onClick={handleAnalyzeImages}
+                    className="w-full gap-2"
+                    size="lg"
+                  >
+                    <Sparkles className="w-5 h-5" />
+                    Wake Up The AI Librarian
                   </Button>
-                </Label>
-              </div>
-              <div className="mt-6 space-y-2">
-                <h4 className="font-medium">How it works:</h4>
-                <ol className="text-sm text-muted-foreground space-y-1 list-decimal list-inside">
-                  <li>Upload photos of your items</li>
-                  <li>AI analyzes and identifies items</li>
-                  <li>Automatic categorization and valuation</li>
-                  <li>Review and edit as needed</li>
-                </ol>
-              </div>
+                  <Button
+                    variant="outline"
+                    onClick={() => {
+                      setShowAnalyzeButton(false);
+                      setUploadedUrls([]);
+                      setFiles([]);
+                      if (fileInputRef.current) {
+                        fileInputRef.current.value = "";
+                      }
+                    }}
+                    className="w-full"
+                  >
+                    Cancel
+                  </Button>
+                </div>
+              )}
+
+              {analyzing && (
+                <div className="w-full max-w-md">
+                  <div className="bg-card border rounded-lg p-6 space-y-6">
+                    <div className="text-center">
+                      <div className="w-16 h-16 mx-auto mb-4 bg-primary/10 rounded-2xl flex items-center justify-center">
+                        <Sparkles className="w-8 h-8 text-primary" />
+                      </div>
+                      <h3 className="text-xl font-semibold mb-2">Processing Your Items</h3>
+                      <p className="text-sm text-muted-foreground">
+                        Our AI is analyzing your photos...
+                      </p>
+                    </div>
+
+                    <div className="space-y-4">
+                      <div className={`flex items-center gap-3 p-3 rounded-lg ${
+                        analysisStep === 'uploading' ? 'bg-primary/10' : 'bg-muted/50'
+                      }`}>
+                        <Upload className="w-5 h-5" />
+                        <span className="text-sm font-medium">Uploading Images</span>
+                      </div>
+
+                      <div className={`flex items-center gap-3 p-3 rounded-lg ${
+                        analysisStep === 'analyzing' ? 'bg-primary/10' : 'bg-muted/50'
+                      }`}>
+                        <Sparkles className="w-5 h-5" />
+                        <span className="text-sm font-medium">AI Analysis</span>
+                      </div>
+
+                      <div className={`flex items-center gap-3 p-3 rounded-lg ${
+                        analysisStep === 'saving' ? 'bg-primary/10' : 'bg-muted/50'
+                      }`}>
+                        <FileText className="w-5 h-5" />
+                        <span className="text-sm font-medium">Saving Items</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              <input
+                ref={fileInputRef}
+                type="file"
+                multiple
+                accept="image/*"
+                className="hidden"
+                onChange={(e) => {
+                  if (e.target.files) {
+                    setFiles(Array.from(e.target.files));
+                  }
+                }}
+              />
             </CardContent>
           </Card>
 

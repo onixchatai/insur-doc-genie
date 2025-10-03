@@ -1,1 +1,4 @@
 project_id = "vsdoptlarqpgrwbccbts"
+
+[functions.analyze-items]
+verify_jwt = true
