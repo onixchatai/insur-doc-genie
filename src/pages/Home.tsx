@@ -38,10 +38,68 @@ const Home = () => {
 
     setLoading(true);
     try {
-      toast({
-        title: "AI Analysis Coming Soon",
-        description: "Image upload and AI analysis will be available soon!",
-      });
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) throw new Error("Not authenticated");
+
+      let successCount = 0;
+      let errorCount = 0;
+
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        const fileExt = file.name.split('.').pop();
+        const fileName = `${user.id}/${Date.now()}_${Math.random().toString(36).substring(7)}.${fileExt}`;
+
+        // Upload to storage
+        const { error: uploadError } = await supabase.storage
+          .from('item-photos')
+          .upload(fileName, file);
+
+        if (uploadError) {
+          console.error('Upload error:', uploadError);
+          errorCount++;
+          continue;
+        }
+
+        // Get public URL
+        const { data: { publicUrl } } = supabase.storage
+          .from('item-photos')
+          .getPublicUrl(fileName);
+
+        // Create inventory item with image
+        const { error: insertError } = await supabase
+          .from('inventory_items')
+          .insert({
+            user_id: user.id,
+            name: file.name.replace(/\.[^/.]+$/, ''), // Remove extension
+            image_url: publicUrl,
+            condition: 'good',
+          });
+
+        if (insertError) {
+          console.error('Insert error:', insertError);
+          errorCount++;
+        } else {
+          successCount++;
+        }
+      }
+
+      if (successCount > 0) {
+        toast({
+          title: "Upload Successful",
+          description: `${successCount} photo${successCount > 1 ? 's' : ''} uploaded successfully!`,
+        });
+      }
+
+      if (errorCount > 0) {
+        toast({
+          variant: "destructive",
+          title: "Some Uploads Failed",
+          description: `${errorCount} photo${errorCount > 1 ? 's' : ''} failed to upload.`,
+        });
+      }
+
+      // Reset input
+      e.target.value = '';
     } catch (error: any) {
       toast({
         variant: "destructive",
